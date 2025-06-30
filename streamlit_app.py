@@ -111,14 +111,25 @@ def get_sector_breakdown(df):
 
 
 def simulate_historical_growth(df, years=5, rate=0.12, end_date=CURRENT_DATE):
-    dates = pd.date_range(end=end_date, periods=years, freq="YE")
+    """Generate a simple historical growth series.
+
+    Using ``DateOffset`` ensures the final point is ``end_date`` rather than the
+    previous year end. This avoids a gap in the chart when ``CURRENT_DATE`` is
+    mid-year.
+    """
+    freq = pd.DateOffset(years=1)
+    dates = pd.date_range(end=end_date, periods=years, freq=freq)
     total = df["Value"].sum()
     values = [total / ((1 + rate) ** (years - i - 1)) for i in range(years)]
     return pd.DataFrame({"Date": dates, "Value": values})
 
 
-def simulate_future_growth(current_value, years=5, rate=0.1, start_date=CURRENT_DATE):
-    dates = pd.date_range(start=start_date, periods=years, freq="YE")
+def simulate_future_growth(
+    current_value, years=5, rate=0.1, start_date=CURRENT_DATE
+):
+    """Project future growth starting one year after ``start_date``."""
+    freq = pd.DateOffset(years=1)
+    dates = pd.date_range(start=start_date + freq, periods=years, freq=freq)
     values = [current_value * ((1 + rate) ** i) for i in range(1, years + 1)]
     return pd.DataFrame({"Date": dates, "Value": values})
 

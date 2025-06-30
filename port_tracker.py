@@ -107,7 +107,9 @@ def get_sector_breakdown(df):
     return df.groupby('Sector')['Value'].sum().reset_index()
 
 def simulate_historical_growth(df, years=5, rate=0.12, end_date=CURRENT_DATE):
-    dates = pd.date_range(end=end_date, periods=years, freq="YE")
+    """Generate historical data using ``end_date`` as the final point."""
+    freq = pd.DateOffset(years=1)
+    dates = pd.date_range(end=end_date, periods=years, freq=freq)
     total = df['Value'].sum()
     # reverse order so first date is oldest
     values = [total / ((1 + rate) ** (years - i - 1)) for i in range(years)]
@@ -115,7 +117,9 @@ def simulate_historical_growth(df, years=5, rate=0.12, end_date=CURRENT_DATE):
 
 
 def simulate_future_growth(current_value, years=5, rate=0.1, start_date=CURRENT_DATE):
-    dates = pd.date_range(start=start_date, periods=years, freq="YE")
+    """Project future growth starting one year after ``start_date``."""
+    freq = pd.DateOffset(years=1)
+    dates = pd.date_range(start=start_date + freq, periods=years, freq=freq)
     values = [current_value * ((1 + rate) ** i) for i in range(1, years + 1)]
     return pd.DataFrame({"Date": dates, "Value": values})
 
