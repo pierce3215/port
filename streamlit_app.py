@@ -31,9 +31,14 @@ def save_portfolio(data: dict) -> None:
         json.dump(data, f, indent=2)
 
 
-@st.cache_data(ttl=3600)
+@st.cache_resource(ttl=3600)
 def fetch_stock(ticker: str) -> yf.Ticker:
-    """Fetch stock information and cache the result for an hour."""
+    """Fetch a ``yfinance.Ticker`` object and cache it for an hour.
+
+    ``st.cache_data`` attempts to pickle return values which fails with the
+    ``yfinance.Ticker`` object. ``st.cache_resource`` avoids pickling and is
+    therefore safe to use here.
+    """
     return yf.Ticker(ticker)
 
 
