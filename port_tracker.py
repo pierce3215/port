@@ -12,6 +12,9 @@ import os
 # --- Portfolio Data ---
 PORTFOLIO_FILE = "portfolio.json"
 
+# Fixed reference date used across the dashboard
+CURRENT_DATE = datetime(2025, 6, 30)
+
 DEFAULT_PORTFOLIO = {
     "GOOGL": {"shares": 28, "cost_basis": 185.45},
     "NVDA": {"shares": 100.012031, "cost_basis": 113.46},
@@ -45,6 +48,7 @@ def get_portfolio_df():
     for ticker, pos in portfolio.items():
         stock = yf.Ticker(ticker)
         price = stock.fast_info.get('lastPrice')
+        target = stock.info.get('targetMeanPrice')
         if price is None:
             continue
 
@@ -68,7 +72,8 @@ def get_portfolio_df():
             'Invested': invested,
             'Gain': gain,
             'Dividend': annual_dividend,
-            'Sector': stock.info.get('sector', 'Unknown')
+            'Sector': stock.info.get('sector', 'Unknown'),
+            'Price Target': target
         })
 
     df = pd.DataFrame(records)
@@ -78,11 +83,17 @@ def get_portfolio_df():
 def get_sector_breakdown(df):
     return df.groupby('Sector')['Value'].sum().reset_index()
 
-def simulate_historical_growth(df, years=5, rate=0.12):
-    now = datetime.now()
-    dates = pd.date_range(end=now, periods=years, freq='Y')
+def simulate_historical_growth(df, years=5, rate=0.12, end_date=CURRENT_DATE):
+    dates = pd.date_range(end=end_date, periods=years, freq='Y')
     total = df['Value'].sum()
-    values = [total / ((1 + rate) ** (years - i)) for i in range(years)]
+    # reverse order so first date is oldest
+    values = [total / ((1 + rate) ** (years - i - 1)) for i in range(years)]
+    return pd.DataFrame({'Date': dates, 'Value': values})
+
+
+def simulate_future_growth(current_value, years=5, rate=0.1, start_date=CURRENT_DATE):
+    dates = pd.date_range(start=start_date, periods=years + 1, freq='Y')[1:]
+    values = [current_value * ((1 + rate) ** i) for i in range(1, years + 1)]
     return pd.DataFrame({'Date': dates, 'Value': values})
 
 # --- Dash App Setup ---
@@ -113,6 +124,18 @@ app.layout = dbc.Container([
     dbc.Row([
         dbc.Col(dcc.Dropdown(id='remove-dropdown', placeholder='Select to remove', options=[{"label": t, "value": t} for t in portfolio.keys()]), md=3),
         dbc.Col(dbc.Button('Remove Stock', id='remove-stock-btn', color='danger', className='w-100'), md=2)
+    ], className='mb-4'),
+
+    # --- Projection Inputs ---
+    dbc.Row([
+        dbc.Col(dbc.InputGroup([
+            dbc.InputGroupText("Growth Rate %"),
+            dbc.Input(id='growth-rate', type='number', value=10)
+        ]), md=2),
+        dbc.Col(dbc.InputGroup([
+            dbc.InputGroupText("Years Ahead"),
+            dbc.Input(id='growth-years', type='number', value=5)
+        ]), md=2)
     ], className='mb-4'),
     # --- Top Metrics ---
     dbc.Row([
@@ -149,6 +172,16 @@ app.layout = dbc.Container([
         ], color="dark", inverse=True), md=3)
     ], className="mb-4"),
 
+    dbc.Row([
+        dbc.Col(dbc.Card([
+            dbc.CardHeader("Projected Value", className="text-info"),
+            dbc.CardBody([
+                html.H3(id='future-value', className='card-title'),
+                html.P(id='future-date', className='card-text')
+            ])
+        ], color='dark', inverse=True), md=3)
+    ], className='mb-4'),
+
     # --- Charts ---
     dbc.Row([
         dbc.Col(dcc.Graph(id='donut-chart', config={'displayModeBar': False}), md=4),
@@ -173,6 +206,8 @@ app.layout = dbc.Container([
      Output('total-gain', 'children'),
      Output('total-roi', 'children'),
      Output('total-dividend', 'children'),
+     Output('future-value', 'children'),
+     Output('future-date', 'children'),
      Output('donut-chart', 'figure'),
      Output('breakdown-table', 'children'),
      Output('sector-pie', 'figure'),
@@ -184,13 +219,15 @@ app.layout = dbc.Container([
      Output('cost-input', 'value')],
     [Input('donut-chart', 'id'),
      Input('add-stock-btn', 'n_clicks'),
-     Input('remove-stock-btn', 'n_clicks')],
+     Input('remove-stock-btn', 'n_clicks'),
+     Input('growth-rate', 'value'),
+     Input('growth-years', 'value')],
     [State('ticker-input', 'value'),
      State('shares-input', 'value'),
      State('cost-input', 'value'),
      State('remove-dropdown', 'value')]
 )
-def update_dashboard(_, add_clicks, remove_clicks, ticker, shares, cost_basis, rem):
+def update_dashboard(_, add_clicks, remove_clicks, rate, years, ticker, shares, cost_basis, rem):
     ctx = callback_context
     trigger = ctx.triggered[0]['prop_id'].split('.')[0] if ctx.triggered else None
     if trigger == 'add-stock-btn' and ticker and shares and cost_basis:
@@ -207,7 +244,12 @@ def update_dashboard(_, add_clicks, remove_clicks, ticker, shares, cost_basis, r
     gain = total_value - total_cost
     roi = (gain / total_cost * 100) if total_cost else 0
     sector_df = get_sector_breakdown(df)
-    growth_df = simulate_historical_growth(df)
+    hist_df = simulate_historical_growth(df)
+    future_df = simulate_future_growth(total_value, years or 1, (rate or 0) / 100)
+    growth_df = pd.concat([
+        hist_df.assign(Type='Historical'),
+        future_df.assign(Type='Projected')
+    ])
 
     pie_fig = px.pie(df, names='Ticker', values='Value', hole=0.5)
     pie_fig.update_layout(template="plotly_dark")
@@ -215,7 +257,7 @@ def update_dashboard(_, add_clicks, remove_clicks, ticker, shares, cost_basis, r
     sector_fig = px.pie(sector_df, names='Sector', values='Value', hole=0.3, title='Sector Allocation')
     sector_fig.update_layout(template="plotly_dark")
 
-    growth_fig = px.line(growth_df, x='Date', y='Value', title='Estimated Portfolio Growth')
+    growth_fig = px.line(growth_df, x='Date', y='Value', color='Type', title='Portfolio Growth Projection')
     growth_fig.update_layout(template="plotly_dark")
 
     gain_bar = px.bar(df, x='Ticker', y='Gain', title='Gain by Ticker')
@@ -226,7 +268,8 @@ def update_dashboard(_, add_clicks, remove_clicks, ticker, shares, cost_basis, r
         html.Th("Value/Invested"),
         html.Th("Gain"),
         html.Th("Allocation"),
-        html.Th("Dividend")
+        html.Th("Dividend"),
+        html.Th("Price Target")
     ]))]
 
     rows = []
@@ -237,10 +280,14 @@ def update_dashboard(_, add_clicks, remove_clicks, ticker, shares, cost_basis, r
             html.Td(f"${row['Value']:,.0f} / ${row['Invested']:,.0f}"),
             html.Td(f"{row['Gain']:,.2f}", style={"color": gain_color}),
             html.Td(f"{row['Allocation']:.2f}%"),
-            html.Td(f"${row['Dividend']:,.2f}")
+            html.Td(f"${row['Dividend']:,.2f}"),
+            html.Td(f"${row['Price Target'] or 0:,.2f}")
         ]))
 
     table_body.append(html.Tbody(rows))
+
+    future_value = future_df['Value'].iloc[-1] if not future_df.empty else total_value
+    future_date = future_df['Date'].iloc[-1].strftime('%Y-%m-%d') if not future_df.empty else CURRENT_DATE.strftime('%Y-%m-%d')
 
     options = [{"label": t, "value": t} for t in portfolio.keys()]
 
@@ -250,6 +297,8 @@ def update_dashboard(_, add_clicks, remove_clicks, ticker, shares, cost_basis, r
         f"{gain:+,.2f}",
         f"{roi:.2f}%",
         f"${dividends:,.2f}",
+        f"${future_value:,.2f}",
+        f"as of {future_date}",
         pie_fig,
         dbc.Table(table_body, bordered=True, hover=True, responsive=True, striped=True, class_name="table-dark"),
         sector_fig,
