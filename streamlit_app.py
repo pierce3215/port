@@ -53,7 +53,8 @@ def get_portfolio_df(portfolio):
     for ticker, pos in portfolio.items():
         stock = fetch_stock(ticker)
         price = stock.fast_info.get("lastPrice")
-        target = stock.info.get("targetMeanPrice")
+        info = stock.info or {}
+        target = info.get("targetMeanPrice")
         if price is None:
             continue
 
@@ -63,9 +64,17 @@ def get_portfolio_df(portfolio):
         invested = shares * cost_basis
         gain = value - invested
 
-        dividend_rate = stock.info.get("dividendYield", 0) or 0
-        annual_dividend = dividend_rate * value
+        div_rate = info.get("dividendRate") or 0
+        div_yield = (info.get("dividendYield") or 0) * 100
+        annual_dividend = div_rate * shares
         dividends += annual_dividend
+
+        hist = stock.history(period="1y")
+        change_1y = 0.0
+        if not hist.empty:
+            first_price = hist["Close"].iloc[0]
+            if first_price:
+                change_1y = (price - first_price) / first_price * 100
 
         cal = stock.calendar or {}
         div_date = cal.get("Dividend Date")
@@ -89,14 +98,21 @@ def get_portfolio_df(portfolio):
                 "Ticker": ticker,
                 "Shares": shares,
                 "Cost Basis": cost_basis,
+                "Price": price,
                 "Value": value,
                 "Invested": invested,
                 "Gain": gain,
+                "Dividend Yield %": div_yield,
                 "Dividend Income": annual_dividend,
                 "Dividend Amount": div_amount,
                 "Next Dividend Date": div_date,
-                "Sector": stock.info.get("sector", "Unknown"),
+                "Sector": info.get("sector", "Unknown"),
                 "Price Target": target,
+                "PE Ratio": info.get("trailingPE") or info.get("forwardPE"),
+                "52w Low": info.get("fiftyTwoWeekLow"),
+                "52w High": info.get("fiftyTwoWeekHigh"),
+                "Beta": info.get("beta"),
+                "1Y Change %": change_1y,
             }
         )
 
@@ -194,11 +210,25 @@ def main():
 
     future_value = future_df["Value"].iloc[-1] if not future_df.empty else total_value
     future_date = future_df["Date"].iloc[-1].strftime("%Y-%m-%d") if not future_df.empty else CURRENT_DATE.strftime("%Y-%m-%d")
-    c1, c2 = st.columns(2)
+    c1, c2, c3 = st.columns(3)
     c1.metric("Projected Value", f"${future_value:,.2f}", help=f"as of {future_date}")
     next_amt_text = f"${next_div_amount:,.2f}" if next_div_amount else "N/A"
     next_date_text = next_div_date.strftime("%Y-%m-%d") if next_div_date else "N/A"
     c2.metric("Next Dividend", next_amt_text, help=next_date_text)
+
+    beta_portfolio = 0.0
+    if not df.empty:
+        beta_portfolio = (df["Beta"] * df["Value"]).sum() / df["Value"].sum()
+    c3.metric("Portfolio Beta", f"{beta_portfolio:.2f}")
+
+    if not df.empty:
+        st.subheader("Stock Performance")
+        selected = st.selectbox("Ticker", df["Ticker"].tolist())
+        if selected:
+            hist = fetch_stock(selected).history(period="1y")
+            if not hist.empty:
+                hist_fig = px.line(hist, x=hist.index, y="Close", title=f"{selected} 1Y Price")
+                st.plotly_chart(hist_fig, use_container_width=True)
 
     if not df.empty:
         pie_fig = px.pie(df, names="Ticker", values="Value", hole=0.5)
@@ -215,13 +245,20 @@ def main():
             "Ticker",
             "Shares",
             "Cost Basis",
+            "Price",
             "Value",
             "Invested",
             "Gain",
             "Allocation",
+            "Dividend Yield %",
             "Dividend Income",
             "Next Dividend Date",
             "Price Target",
+            "PE Ratio",
+            "52w Low",
+            "52w High",
+            "Beta",
+            "1Y Change %",
         ]
         st.dataframe(df[display_cols].round(2), use_container_width=True)
     else:
