@@ -65,7 +65,6 @@ def get_portfolio_df(portfolio):
         gain = value - invested
 
         div_rate = info.get("dividendRate") or 0
-        div_yield = (info.get("dividendYield") or 0) * 100
         annual_dividend = div_rate * shares
         dividends += annual_dividend
 
@@ -81,11 +80,12 @@ def get_portfolio_df(portfolio):
         div_amount = 0.0
         if not stock.dividends.empty:
             div_amount = float(stock.dividends.iloc[-1])
+        next_payment = div_amount * shares
 
         if div_date is not None:
             div_date = pd.to_datetime(div_date).date()
             if div_date >= CURRENT_DATE.date():
-                total_payment = div_amount * shares
+                total_payment = next_payment
                 if next_div_date is None or div_date < next_div_date:
                     next_div_date = div_date
                     next_div_amount = total_payment
@@ -102,9 +102,8 @@ def get_portfolio_df(portfolio):
                 "Value": value,
                 "Invested": invested,
                 "Gain": gain,
-                "Dividend Yield %": div_yield,
-                "Dividend Income": annual_dividend,
-                "Dividend Amount": div_amount,
+                "Dividend/Share": div_amount,
+                "Next Dividend Payment": next_payment,
                 "Next Dividend Date": div_date,
                 "Sector": info.get("sector", "Unknown"),
                 "Price Target": target,
@@ -148,6 +147,44 @@ def simulate_future_growth(
     dates = pd.date_range(start=start_date + freq, periods=years, freq=freq)
     values = [current_value * ((1 + rate) ** i) for i in range(1, years + 1)]
     return pd.DataFrame({"Date": dates, "Value": values})
+
+
+def simulate_contributions(
+    base_salary,
+    bonus_pct,
+    bonus_tax,
+    raise_pct,
+    monthly_investment,
+    growth_rate,
+    years,
+):
+    """Simulate portfolio growth with regular contributions."""
+    salary = base_salary
+    portfolio_value = 0.0
+    records = []
+
+    for year in range(1, years + 1):
+        annual_contribution = monthly_investment * 12
+        after_tax_bonus = salary * bonus_pct * (1 - bonus_tax)
+        total_invested = annual_contribution + after_tax_bonus
+        portfolio_value = (portfolio_value + total_invested) * (1 + growth_rate)
+
+        records.append(
+            {
+                "Year": year,
+                "Base Salary": round(salary, 2),
+                "Monthly Investment": round(monthly_investment, 2),
+                "Annual Contribution": round(annual_contribution, 2),
+                "After-Tax Bonus": round(after_tax_bonus, 2),
+                "Total Invested": round(total_invested, 2),
+                "Portfolio Value": round(portfolio_value, 2),
+            }
+        )
+
+        salary *= 1 + raise_pct
+        monthly_investment += (base_salary * raise_pct) / 12
+
+    return pd.DataFrame(records)
 
 
 def main():
@@ -221,6 +258,38 @@ def main():
         beta_portfolio = (df["Beta"] * df["Value"]).sum() / df["Value"].sum()
     c3.metric("Portfolio Beta", f"{beta_portfolio:.2f}")
 
+    st.divider()
+    st.subheader("Portfolio Contribution Simulator")
+    base_salary = st.number_input("Base Salary ($)", value=250000)
+    bonus_pct = st.slider("Bonus %", 0.0, 1.0, 0.40)
+    bonus_tax = st.slider("Bonus Tax Rate", 0.0, 0.5, 0.35)
+    raise_pct = st.slider("Annual Raise %", 0.0, 0.1, 0.04)
+    monthly_inv = st.number_input("Initial Monthly Investment", value=2000)
+    growth_rate = st.slider("Portfolio Growth Rate", 0.0, 0.30, 0.15)
+    years_sim = st.slider("Years to Simulate", 1, 50, 10)
+
+    sim_df = simulate_contributions(
+        base_salary,
+        bonus_pct,
+        bonus_tax,
+        raise_pct,
+        monthly_inv,
+        growth_rate,
+        years_sim,
+    )
+
+    if not sim_df.empty:
+        sim_fig = px.line(
+            sim_df,
+            x="Year",
+            y="Portfolio Value",
+            markers=True,
+            title="Projected Portfolio Value",
+            labels={"Portfolio Value": "Portfolio ($)"},
+        )
+        st.plotly_chart(sim_fig, use_container_width=True)
+        st.dataframe(sim_df, use_container_width=True)
+
     if not df.empty:
         st.subheader("Stock Performance")
         selected = st.selectbox("Ticker", df["Ticker"].tolist())
@@ -233,12 +302,21 @@ def main():
     if not df.empty:
         pie_fig = px.pie(df, names="Ticker", values="Value", hole=0.5)
         sector_fig = px.pie(sector_df, names="Sector", values="Value", hole=0.3, title="Sector Allocation")
-        growth_fig = px.line(growth_df, x="Date", y="Value", color="Type", title="Portfolio Growth Projection")
         gain_bar = px.bar(df, x="Ticker", y="Gain", title="Gain by Ticker")
 
         st.plotly_chart(pie_fig, use_container_width=True)
         st.plotly_chart(sector_fig, use_container_width=True)
-        st.plotly_chart(growth_fig, use_container_width=True)
+
+        if not growth_df.empty and growth_df["Value"].notna().any():
+            growth_fig = px.line(
+                growth_df,
+                x="Date",
+                y="Value",
+                color="Type",
+                title="Portfolio Growth Projection",
+            )
+            st.plotly_chart(growth_fig, use_container_width=True)
+
         st.plotly_chart(gain_bar, use_container_width=True)
 
         display_cols = [
@@ -250,8 +328,8 @@ def main():
             "Invested",
             "Gain",
             "Allocation",
-            "Dividend Yield %",
-            "Dividend Income",
+            "Dividend/Share",
+            "Next Dividend Payment",
             "Next Dividend Date",
             "Price Target",
             "PE Ratio",
