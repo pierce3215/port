@@ -73,6 +73,13 @@ app.title = "Snowball Portfolio Tracker"
 app.layout = dbc.Container([
     html.Br(),
 
+    # --- Add Stock ---
+    dbc.Row([
+        dbc.Col(dbc.Input(id='ticker-input', placeholder='Ticker', type='text'), md=2),
+        dbc.Col(dbc.Input(id='shares-input', placeholder='Shares', type='number'), md=2),
+        dbc.Col(dbc.Input(id='cost-input', placeholder='Cost Basis', type='number'), md=2),
+        dbc.Col(dbc.Button('Add Stock', id='add-stock-btn', color='primary'), md=2)
+    ], className='mb-4'),
     # --- Top Metrics ---
     dbc.Row([
         dbc.Col(dbc.Card([
@@ -131,9 +138,18 @@ app.layout = dbc.Container([
      Output('breakdown-table', 'children'),
      Output('sector-pie', 'figure'),
      Output('growth-line', 'figure')],
-    Input('donut-chart', 'id')
+    [Input('donut-chart', 'id'),
+     Input('add-stock-btn', 'n_clicks')],
+    [State('ticker-input', 'value'),
+     State('shares-input', 'value'),
+     State('cost-input', 'value')]
 )
-def update_dashboard(_):
+def update_dashboard(_, n_clicks, ticker, shares, cost_basis):
+    if n_clicks and ticker and shares and cost_basis:
+        portfolio[ticker.upper()] = {
+            'shares': float(shares),
+            'cost_basis': float(cost_basis)
+        }
     df, total_value, total_cost, dividends = get_portfolio_df()
     gain = total_value - total_cost
     sector_df = get_sector_breakdown(df)
